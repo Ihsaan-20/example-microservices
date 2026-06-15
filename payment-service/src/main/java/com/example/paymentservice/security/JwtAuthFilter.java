@@ -1,6 +1,5 @@
 package com.example.paymentservice.security;
 
-import com.example.paymentservice.repository.TokenRepository;
 import com.example.paymentservice.util.JwtUtil;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -22,11 +21,9 @@ public class JwtAuthFilter extends OncePerRequestFilter {
     private static final Logger log = LoggerFactory.getLogger(JwtAuthFilter.class);
 
     private final JwtUtil jwtUtil;
-    private final TokenRepository tokenRepository;
 
-    public JwtAuthFilter(JwtUtil jwtUtil, TokenRepository tokenRepository) {
+    public JwtAuthFilter(JwtUtil jwtUtil) {
         this.jwtUtil = jwtUtil;
-        this.tokenRepository = tokenRepository;
     }
 
     @Override
@@ -41,16 +38,10 @@ public class JwtAuthFilter extends OncePerRequestFilter {
 
             if (jwtUtil.isTokenValid(token)) {
                 String username = jwtUtil.extractUsername(token);
-
-                var tokenEntity = tokenRepository.findByTokenAndRevokedFalse(token);
-                if (tokenEntity.isPresent()) {
-                    log.debug("Valid JWT token for user: {}", username);
-                    UsernamePasswordAuthenticationToken auth =
-                            new UsernamePasswordAuthenticationToken(username, null, List.of());
-                    SecurityContextHolder.getContext().setAuthentication(auth);
-                } else {
-                    log.warn("Token not found or revoked in DB for user: {}", username);
-                }
+                log.debug("Valid JWT token for user: {}", username);
+                UsernamePasswordAuthenticationToken auth =
+                        new UsernamePasswordAuthenticationToken(username, null, List.of());
+                SecurityContextHolder.getContext().setAuthentication(auth);
             } else {
                 log.warn("Invalid JWT token");
             }

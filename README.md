@@ -1,33 +1,37 @@
 # Microservices Project
 
-A Spring Boot 3.3 microservices demo with JWT authentication, service discovery, API gateway, circuit breaker, and H2 databases.
+A Spring Boot 3.3 microservices demo with centralized JWT authentication (auth-service), service discovery (Eureka), API gateway, circuit breaker (Resilience4j), and MySQL databases.
 
 ## Architecture
 
 ```
-                    ┌─────────────────┐
-                    │  Service Registry│
-                    │  (Eureka) :8761  │
-                    └────────┬────────┘
-                             │ registers to
-    ┌───────────────┐  ┌─────┴──────┐  ┌───────────────┐
-    │  API Gateway  │  │   Order    │  │   Payment    │
-    │ (Spring Cloud)│──│  Service   │──│   Service    │
-    │    :8080      │  │   :8081    │  │   :8082      │
-    └───────────────┘  └────────────┘  └──────────────┘
-                              │
-                         circuit breaker
-                         (Resilience4j)
+                        ┌─────────────────┐
+                        │  Service Registry│
+                        │  (Eureka) :8761  │
+                        └────────┬────────┘
+                                 │ registers to
+        ┌───────────────┐  ┌─────┴──────┐  ┌───────────────┐
+        │  API Gateway  │  │   Auth     │  │   Order      │
+        │ (Spring Cloud)│  │  Service   │  │   Service    │
+        │    :8080      │──│   :8083    │──│   :8081      │──┐
+        └───────────────┘  └────────────┘  └──────┬───────┘  │
+                                                   │         │
+                                              circuit     Payment
+                                              breaker    Service
+                                              (Resil.4j)  :8082
+                                                    │      │
+                                                    └──────┘
 ```
 
 ## Services
 
-| Service | Port | Description |
-|---------|------|-------------|
-| `service-registry` | 8761 | Eureka Server — all services register here |
-| `api-gateway` | 8080 | Spring Cloud Gateway — single entry point |
-| `order-service` | 8081 | Order management with JWT auth + circuit breaker |
-| `payment-service` | 8082 | Payment processing with JWT auth |
+| Service | Port | Database | Description |
+|---------|------|----------|-------------|
+| `service-registry` | 8761 | — | Eureka Server — all services register here |
+| `api-gateway` | 8080 | — | Spring Cloud Gateway — single entry point |
+| `auth-service` | 8083 | `ex_mic_auth_db` | JWT login & token validation |
+| `order-service` | 8081 | `ex_mic_order_service` | Order management with circuit breaker |
+| `payment-service` | 8082 | `ex_mic_payment_service` | Payment processing |
 
 ## Quick Start
 
@@ -41,15 +45,17 @@ docker compose up --build
 
 Build all JARs:
 ```bash
-cd order-service && mvn clean package -DskipTests
-cd ../payment-service && mvn clean package -DskipTests
-cd ../service-registry && mvn clean package -DskipTests
+cd service-registry && mvn clean package -DskipTests
+cd ../auth-service && mvn clean package -DskipTests
 cd ../api-gateway && mvn clean package -DskipTests
+cd ../payment-service && mvn clean package -DskipTests
+cd ../order-service && mvn clean package -DskipTests
 ```
 
-Start in order:
+Make sure MySQL is running on `localhost:3306` with root/root, then start in order:
 ```bash
 java -jar service-registry/target/service-registry-1.0.0.jar
+java -jar auth-service/target/auth-service-1.0.0.jar
 java -jar api-gateway/target/api-gateway-1.0.0.jar
 java -jar payment-service/target/payment-service-1.0.0.jar
 java -jar order-service/target/order-service-1.0.0.jar
@@ -57,12 +63,12 @@ java -jar order-service/target/order-service-1.0.0.jar
 
 ## Authentication
 
-Dummy users seeded on startup:
+Auth is centralized in auth-service (port 8083). Dummy users seeded on startup:
 
-| Username | Password | Role |
-|----------|----------|------|
-| `admin` | `password` | ADMIN |
-| `user` | `123456` | USER |
+| Username | Password |
+|----------|----------|
+| `admin` | `password` |
+| `user` | `123456` |
 
 ### Login
 
@@ -77,7 +83,7 @@ Response:
 {"token":"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiIsImlhdCI6MTc0OTU5MDk0MCwiZXhwIjoxNzQ5NTk0NTQwfQ.bdQF..."}
 ```
 
-Tokens are stored in the `tokens` table and validated against the DB on each request.
+Tokens are stored in the `tokens` table in auth-service and validated against the DB on each request via auth-service.
 
 ### Using the token
 
@@ -100,23 +106,23 @@ Response:
 ### Open (no auth)
 | Method | Path | Service |
 |--------|------|---------|
-| POST | `/auth/login` | order-service |
-| GET | `/h2-console/**` | order-service, payment-service |
+| POST | `/auth/login` | auth-service |
 
 ### Protected (JWT required)
 | Method | Path | Service |
 |--------|------|---------|
+| POST | `/auth/validate` | auth-service |
 | POST | `/orders` | order-service |
 | POST | `/payments` | payment-service |
 | GET | `/actuator/health` | all services |
-| GET | `/actuator/info` | order-service, payment-service |
 | GET | `/actuator/circuitbreakers` | order-service |
 
 ## API via Gateway
 
 All requests go through `http://localhost:8080`:
 
-- `POST /auth/login` → forwarded to order-service
+- `POST /auth/login` → forwarded to auth-service
+- `POST /auth/validate` → forwarded to auth-service
 - `POST /orders` → forwarded to order-service
 - `POST /payments` → forwarded to payment-service
 
@@ -131,69 +137,47 @@ Order Service wraps the payment call with a circuit breaker. If payment-service 
 ### Service Discovery (Eureka)
 - All services register with Eureka at startup
 - Order Service uses `@LoadBalanced RestTemplate` to call `http://payment-service/payments`
-- Gateway routes via `lb://order-service` / `lb://payment-service`
+- Gateway routes via `lb://<service-name>`
 
-### Database (H2 in-memory)
-Each service has its own H2 database:
+### Database (MySQL)
 
-**Order Service** — `jdbc:h2:mem:ordersdb`
-- `users` — dummy users
-- `tokens` — issued JWT tokens
-- `orders` — created orders
+Each service has its own MySQL database (all on the same MySQL instance, port 3306):
 
-**Payment Service** — `jdbc:h2:mem:paymentsdb`
-- `users` — dummy users
-- `tokens` — issued JWT tokens
-- `payments` — processed payments
+| Service | Database |
+|---------|----------|
+| auth-service | `ex_mic_auth_db` |
+| order-service | `ex_mic_order_service` |
+| payment-service | `ex_mic_payment_service` |
 
-### H2 Console
-Access at:
-- `http://localhost:8081/h2-console` (JDBC URL: `jdbc:h2:mem:ordersdb`)
-- `http://localhost:8082/h2-console` (JDBC URL: `jdbc:h2:mem:paymentsdb`)
-
-Login: `sa` / empty password
+Tables are auto-created by JPA/Hibernate (`ddl-auto: update`).
 
 ## Project Structure
 
 ```
 example-microservices/
 ├── service-registry/          # Eureka Server
-│   ├── pom.xml
-│   ├── Dockerfile
-│   └── src/main/java/.../ServiceRegistryApplication.java
+├── auth-service/              # Centralized authentication
+│   ├── entity/   (User, Token)
+│   ├── repository/
+│   ├── service/
+│   ├── controller/ (AuthController)
+│   └── security/  (SecurityConfig — no JWT filter)
 │
 ├── api-gateway/               # Spring Cloud Gateway
-│   ├── pom.xml
-│   ├── Dockerfile
-│   └── src/main/resources/application.yml  (route config)
 │
 ├── order-service/             # Order management
-│   ├── pom.xml
-│   ├── Dockerfile
-│   └── src/main/java/com/example/orderservice/
-│       ├── OrderServiceApplication.java
-│       ├── config/     (SecurityConfig, AppConfig, DataInitializer)
-│       ├── controller/ (AuthController, OrderController)
-│       ├── dto/        (LoginRequest, LoginResponse, OrderRequest)
-│       ├── entity/     (User, Token, Order)
-│       ├── repository/ (UserRepository, TokenRepository, OrderRepository)
-│       ├── security/   (JwtAuthFilter)
-│       ├── service/    (AuthService, OrderService)
-│       └── util/       (JwtUtil)
+│   ├── entity/   (Order)
+│   ├── repository/ (OrderRepository)
+│   ├── controller/ (OrderController)
+│   ├── security/  (JwtAuthFilter — local JWT validation)
+│   └── service/   (OrderService with circuit breaker)
 │
 ├── payment-service/           # Payment processing
-│   ├── pom.xml
-│   ├── Dockerfile
-│   └── src/main/java/com/example/paymentservice/
-│       ├── PaymentServiceApplication.java
-│       ├── config/     (SecurityConfig, DataInitializer)
-│       ├── controller/ (AuthController, PaymentController)
-│       ├── dto/        (LoginRequest, LoginResponse)
-│       ├── entity/     (User, Token, Payment)
-│       ├── repository/ (UserRepository, TokenRepository, PaymentRepository)
-│       ├── security/   (JwtAuthFilter)
-│       ├── service/    (AuthService, PaymentService)
-│       └── util/       (JwtUtil)
+│   ├── entity/   (Payment)
+│   ├── repository/ (PaymentRepository)
+│   ├── controller/ (PaymentController)
+│   ├── security/  (JwtAuthFilter — local JWT validation)
+│   └── service/   (PaymentService)
 │
 ├── docker-compose.yml
 └── README.md

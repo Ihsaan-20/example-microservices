@@ -1,0 +1,12 @@
+com\example\authservice\entity\Token.class
+com\example\authservice\controller\AuthController.class
+com\example\authservice\entity\User.class
+com\example\authservice\config\SecurityConfig.class
+com\example\authservice\dto\LoginRequest.class
+com\example\authservice\service\AuthService.class
+com\example\authservice\AuthServiceApplication.class
+com\example\authservice\config\DataInitializer.class
+com\example\authservice\repository\TokenRepository.class
+com\example\authservice\dto\LoginResponse.class
+com\example\authservice\repository\UserRepository.class
+com\example\authservice\util\JwtUtil.class
