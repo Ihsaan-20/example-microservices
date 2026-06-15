@@ -1,209 +1,200 @@
-# Example Microservices Project
+# Microservices Project
 
-## Overview
+A Spring Boot 3.3 microservices demo with JWT authentication, service discovery, API gateway, circuit breaker, and H2 databases.
 
-This project contains a microservices-based application with:
+## Architecture
 
-* Order Service
-* Payment Service
-* JWT Authentication
-* Docker Compose setup
-* H2 Database Console
+```
+                    ┌─────────────────┐
+                    │  Service Registry│
+                    │  (Eureka) :8761  │
+                    └────────┬────────┘
+                             │ registers to
+    ┌───────────────┐  ┌─────┴──────┐  ┌───────────────┐
+    │  API Gateway  │  │   Order    │  │   Payment    │
+    │ (Spring Cloud)│──│  Service   │──│   Service    │
+    │    :8080      │  │   :8081    │  │   :8082      │
+    └───────────────┘  └────────────┘  └──────────────┘
+                              │
+                         circuit breaker
+                         (Resilience4j)
+```
+
+## Services
+
+| Service | Port | Description |
+|---------|------|-------------|
+| `service-registry` | 8761 | Eureka Server — all services register here |
+| `api-gateway` | 8080 | Spring Cloud Gateway — single entry point |
+| `order-service` | 8081 | Order management with JWT auth + circuit breaker |
+| `payment-service` | 8082 | Payment processing with JWT auth |
+
+## Quick Start
+
+### Using Docker
+
+```bash
+docker compose up --build
+```
+
+### Using Java directly
+
+Build all JARs:
+```bash
+cd order-service && mvn clean package -DskipTests
+cd ../payment-service && mvn clean package -DskipTests
+cd ../service-registry && mvn clean package -DskipTests
+cd ../api-gateway && mvn clean package -DskipTests
+```
+
+Start in order:
+```bash
+java -jar service-registry/target/service-registry-1.0.0.jar
+java -jar api-gateway/target/api-gateway-1.0.0.jar
+java -jar payment-service/target/payment-service-1.0.0.jar
+java -jar order-service/target/order-service-1.0.0.jar
+```
+
+## Authentication
+
+Dummy users seeded on startup:
+
+| Username | Password | Role |
+|----------|----------|------|
+| `admin` | `password` | ADMIN |
+| `user` | `123456` | USER |
+
+### Login
+
+```bash
+curl -s http://localhost:8080/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"password"}'
+```
+
+Response:
+```json
+{"token":"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiIsImlhdCI6MTc0OTU5MDk0MCwiZXhwIjoxNzQ5NTk0NTQwfQ.bdQF..."}
+```
+
+Tokens are stored in the `tokens` table and validated against the DB on each request.
+
+### Using the token
+
+```bash
+TOKEN="eyJhbGciOiJIUzI1NiJ9..."
+
+curl -s http://localhost:8080/orders \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"item":"laptop","quantity":1}'
+```
+
+Response:
+```json
+{"orderId":"1","order":"Order created for laptop","payment":"Payment successful"}
+```
+
+## Endpoints
+
+### Open (no auth)
+| Method | Path | Service |
+|--------|------|---------|
+| POST | `/auth/login` | order-service |
+| GET | `/h2-console/**` | order-service, payment-service |
+
+### Protected (JWT required)
+| Method | Path | Service |
+|--------|------|---------|
+| POST | `/orders` | order-service |
+| POST | `/payments` | payment-service |
+| GET | `/actuator/health` | all services |
+| GET | `/actuator/info` | order-service, payment-service |
+| GET | `/actuator/circuitbreakers` | order-service |
+
+## API via Gateway
+
+All requests go through `http://localhost:8080`:
+
+- `POST /auth/login` → forwarded to order-service
+- `POST /orders` → forwarded to order-service
+- `POST /payments` → forwarded to payment-service
+
+## Features
+
+### Circuit Breaker (Resilience4j)
+Order Service wraps the payment call with a circuit breaker. If payment-service is down:
+- The order is saved as `PENDING`
+- A fallback message is returned
+- Circuit breaker health visible at `/actuator/circuitbreakers`
+
+### Service Discovery (Eureka)
+- All services register with Eureka at startup
+- Order Service uses `@LoadBalanced RestTemplate` to call `http://payment-service/payments`
+- Gateway routes via `lb://order-service` / `lb://payment-service`
+
+### Database (H2 in-memory)
+Each service has its own H2 database:
+
+**Order Service** — `jdbc:h2:mem:ordersdb`
+- `users` — dummy users
+- `tokens` — issued JWT tokens
+- `orders` — created orders
+
+**Payment Service** — `jdbc:h2:mem:paymentsdb`
+- `users` — dummy users
+- `tokens` — issued JWT tokens
+- `payments` — processed payments
+
+### H2 Console
+Access at:
+- `http://localhost:8081/h2-console` (JDBC URL: `jdbc:h2:mem:ordersdb`)
+- `http://localhost:8082/h2-console` (JDBC URL: `jdbc:h2:mem:paymentsdb`)
+
+Login: `sa` / empty password
 
 ## Project Structure
 
 ```
-example-microservices
+example-microservices/
+├── service-registry/          # Eureka Server
+│   ├── pom.xml
+│   ├── Dockerfile
+│   └── src/main/java/.../ServiceRegistryApplication.java
 │
-├── order-service
-│   └── target
-│       └── order-service-1.0.0.jar
+├── api-gateway/               # Spring Cloud Gateway
+│   ├── pom.xml
+│   ├── Dockerfile
+│   └── src/main/resources/application.yml  (route config)
 │
-├── payment-service
-│   └── target
-│       └── payment-service-1.0.0.jar
+├── order-service/             # Order management
+│   ├── pom.xml
+│   ├── Dockerfile
+│   └── src/main/java/com/example/orderservice/
+│       ├── OrderServiceApplication.java
+│       ├── config/     (SecurityConfig, AppConfig, DataInitializer)
+│       ├── controller/ (AuthController, OrderController)
+│       ├── dto/        (LoginRequest, LoginResponse, OrderRequest)
+│       ├── entity/     (User, Token, Order)
+│       ├── repository/ (UserRepository, TokenRepository, OrderRepository)
+│       ├── security/   (JwtAuthFilter)
+│       ├── service/    (AuthService, OrderService)
+│       └── util/       (JwtUtil)
+│
+├── payment-service/           # Payment processing
+│   ├── pom.xml
+│   ├── Dockerfile
+│   └── src/main/java/com/example/paymentservice/
+│       ├── PaymentServiceApplication.java
+│       ├── config/     (SecurityConfig, DataInitializer)
+│       ├── controller/ (AuthController, PaymentController)
+│       ├── dto/        (LoginRequest, LoginResponse)
+│       ├── entity/     (User, Token, Payment)
+│       ├── repository/ (UserRepository, TokenRepository, PaymentRepository)
+│       ├── security/   (JwtAuthFilter)
+│       ├── service/    (AuthService, PaymentService)
+│       └── util/       (JwtUtil)
 │
 ├── docker-compose.yml
 └── README.md
 ```
-
----
-
-## Prerequisites
-
-Make sure you have installed:
-
-* Java 17+
-* Maven
-* Docker
-* Docker Compose
-
-Verify installation:
-
-```bash
-java -version
-docker --version
-docker compose version
-```
-
----
-
-# Running Application with Docker
-
-Build and start all services:
-
-```bash
-docker-compose up --build
-```
-
-This will:
-
-* Build Docker images
-* Start all microservices
-* Create required containers
-
----
-
-# Running Services Manually
-
-Navigate to target directory:
-
-```bash
-cd target
-```
-
-## Start Payment Service
-
-```bash
-java -jar payment-service-1.0.0.jar --server.port=8082
-```
-
-Payment Service will run on:
-
-```
-http://localhost:8082
-```
-
----
-
-## Start Order Service
-
-```bash
-java -jar order-service-1.0.0.jar --server.port=8081
-```
-
-Order Service will run on:
-
-```
-http://localhost:8081
-```
-
----
-
-# Authentication
-
-Generate JWT Token:
-
-```bash
-curl -X POST http://localhost:8081/auth/login \
--H "Content-Type: application/json" \
--d '{"username":"user","password":"pass"}'
-```
-
-Example Response:
-
-```json
-{
-  "token": "your-jwt-token"
-}
-```
-
-Copy the token and use it for secured APIs.
-
----
-
-# Order API
-
-Create Order:
-
-```bash
-curl -X POST http://localhost:8081/orders \
--H "Authorization: Bearer <your-jwt-token>" \
--H "Content-Type: application/json" \
--d '{"orderId":1,"amount":500}'
-```
-
----
-
-# H2 Database Console
-
-## Order Service Database
-
-Open:
-
-```
-http://localhost:8081/h2-console
-```
-
-## Payment Service Database
-
-Open:
-
-```
-http://localhost:8082/h2-console
-```
-
-### H2 Console Configuration
-
-JDBC URL:
-
-```
-jdbc:h2:mem:testdb
-```
-
-Username:
-
-```
-sa
-```
-
-Password:
-
-```
-(empty)
-```
-
----
-
-# Service Ports
-
-| Service         | Port |
-| --------------- | ---- |
-| Order Service   | 8081 |
-| Payment Service | 8082 |
-
----
-
-# Stop Application
-
-Docker:
-
-```bash
-docker-compose down
-```
-
-Manual run:
-
-Press:
-
-```
-CTRL + C
-```
-
----
-
-# Notes
-
-* Make sure ports `8081` and `8082` are free before starting.
-* JWT token is required for protected APIs.
-* H2 database is running in memory mode, data will reset after restart.
