@@ -16,6 +16,21 @@ services:
       retries: 10
       start_period: 30s
 
+  phpmyadmin:
+    image: phpmyadmin:latest
+    container_name: phpmyadmin
+    ports:
+      - "8085:80"
+    environment:
+      PMA_HOST: mysql
+      PMA_PORT: 3306
+      PMA_USER: root
+      PMA_PASSWORD: root
+      UPLOAD_LIMIT: 100M
+    depends_on:
+      - mysql
+    restart: unless-stopped
+
   service-registry:
     build: ./service-registry
     container_name: service-registry
